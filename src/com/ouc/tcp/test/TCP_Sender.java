@@ -4,15 +4,13 @@
 package com.ouc.tcp.test;
 
 import com.ouc.tcp.client.TCP_Sender_ADT;
-import com.ouc.tcp.client.UDT_RetransTask;
-import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.*;
-import com.ouc.tcp.tool.TCP_TOOL;
 
 public class TCP_Sender extends TCP_Sender_ADT {
 
     private TCP_PACKET tcpPack;	//待发送的TCP数据报
     private volatile int flag = 0;
+    private int curAck = 0;   // 0 or 1 for rdt2.1
 
     /*构造函数*/
     public TCP_Sender() {
@@ -65,6 +63,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
                 //break;
             }else{
                 System.out.println("Retransmit: "+tcpPack.getTcpH().getTh_seq());
+
                 udt_send(tcpPack);
                 flag = 0;
             }
@@ -77,7 +76,6 @@ public class TCP_Sender extends TCP_Sender_ADT {
         System.out.println("Receive ACK Number： "+ recvPack.getTcpH().getTh_ack());
         ackQueue.add(recvPack.getTcpH().getTh_ack());
         System.out.println();
-
         //处理ACK报文
         waitACK();
 

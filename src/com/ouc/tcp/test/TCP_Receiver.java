@@ -15,6 +15,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 
     private TCP_PACKET ackPack;	//回复的ACK报文段
     int sequence=1;//用于记录当前待接收的包序号，注意包序号不完全是
+    int lastSeq=0;
 
     /*构造函数*/
     public TCP_Receiver() {
@@ -26,22 +27,24 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     //接收到数据报：检查校验和，设置回复的ACK报文段
     public void rdt_recv(TCP_PACKET recvPack) {
         //检查校验码，生成ACK
-        if(CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()) {
+        int recvSeq = recvPack.getTcpH().getTh_seq();
+        if(CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()
+            &&recvSeq > lastSeq) {
             //生成ACK报文段（设置确认号）
             tcpH.setTh_ack(recvPack.getTcpH().getTh_seq());
             ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
             tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
             //回复ACK报文段
             reply(ackPack);
-
             //将接收到的正确有序的数据插入data队列，准备交付
             dataQueue.add(recvPack.getTcpS().getData());
+            lastSeq = recvSeq;
             sequence++;
         }else{
             System.out.println("Recieve Computed: "+CheckSum.computeChkSum(recvPack));
-            System.out.println("Recieved Packet"+recvPack.getTcpH().getTh_sum());
+            System.out.println("Recieved Packet: "+recvPack.getTcpH().getTh_sum());
             System.out.println("Problem: Packet Number: "+recvPack.getTcpH().getTh_seq()+" + InnerSeq:  "+sequence);
-            tcpH.setTh_ack(-1);
+            tcpH.setTh_ack(lastSeq);
             ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
             tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
             //回复ACK报文段
