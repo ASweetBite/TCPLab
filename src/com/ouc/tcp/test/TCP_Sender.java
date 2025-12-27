@@ -4,6 +4,8 @@
 package com.ouc.tcp.test;
 
 import com.ouc.tcp.client.TCP_Sender_ADT;
+import com.ouc.tcp.client.UDT_RetransTask;
+import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.*;
 
 public class TCP_Sender extends TCP_Sender_ADT {
@@ -11,6 +13,10 @@ public class TCP_Sender extends TCP_Sender_ADT {
     private TCP_PACKET tcpPack;	//待发送的TCP数据报
     private volatile int flag = 0;
     private int curAck = 0;   // 0 or 1 for rdt2.1
+    private UDT_Timer timer = new UDT_Timer();
+    private UDT_RetransTask reTransTask;
+    private static final int TIMEOUT = 300; // ms
+
 
     /*构造函数*/
     public TCP_Sender() {
@@ -34,6 +40,8 @@ public class TCP_Sender extends TCP_Sender_ADT {
         udt_send(tcpPack);
         flag = 0;
 
+        reTransTask = new UDT_RetransTask(client,tcpPack);
+        timer.schedule(reTransTask, TIMEOUT);
         //等待ACK报文
         //waitACK();
         while (flag==0);
@@ -43,7 +51,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
     //不可靠发送：将打包好的TCP数据报通过不可靠传输信道发送；仅需修改错误标志
     public void udt_send(TCP_PACKET stcpPack) {
         //设置错误控制标志
-        tcpH.setTh_eflag((byte)1);  //eFlag = 0，信道无错误，发送方像接收方发送数据时不会产生位错
+        tcpH.setTh_eflag((byte)4);  //eFlag = 0，信道无错误，发送方像接收方发送数据时不会产生位错
         //System.out.println("to send: "+stcpPack.getTcpH().getTh_seq());
         //发送数据报
         client.send(stcpPack);
@@ -59,12 +67,13 @@ public class TCP_Sender extends TCP_Sender_ADT {
             // System.out.println("CurrentAck: "+currentAck);
             if (currentAck == tcpPack.getTcpH().getTh_seq()){
                 System.out.println("Clear: "+tcpPack.getTcpH().getTh_seq());
+                timer.cancel();
+                timer = new UDT_Timer();
                 flag = 1;
                 //break;
             }else{
-                System.out.println("Retransmit: "+tcpPack.getTcpH().getTh_seq());
-
-                udt_send(tcpPack);
+//                System.out.println("Retransmit: "+tcpPack.getTcpH().getTh_seq());
+//                udt_send(tcpPack);
                 flag = 0;
             }
         }
