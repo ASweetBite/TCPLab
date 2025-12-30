@@ -12,21 +12,19 @@ public class TCP_Sender extends TCP_Sender_ADT {
 
     private TCP_PACKET tcpPack;	//待发送的TCP数据报
     private volatile int flag = 0;
-    private int curAck = 0;   // 0 or 1 for rdt2.1
-    private UDT_Timer timer = new UDT_Timer();
-    private UDT_RetransTask reTransTask;
-    private static final int TIMEOUT = 300; // ms
-
+    private SendWindow sendWindow;
 
     /*构造函数*/
     public TCP_Sender() {
         super();	//调用超类构造函数
         super.initTCP_Sender(this);		//初始化TCP发送端
+        sendWindow = new SendWindow(client);
     }
 
     @Override
     //可靠发送（应用层调用）：封装应用层数据，产生TCP数据报；需要修改
     public void rdt_send(int dataIndex, int[] appData) {
+        while(!sendWindow.IsSendable());
 
         //生成TCP数据报（设置序号和数据字段/校验和),注意打包的顺序
         tcpH.setTh_seq(dataIndex * appData.length + 1);//包序号设置为字节流号：
@@ -37,14 +35,12 @@ public class TCP_Sender extends TCP_Sender_ADT {
         tcpPack.setTcpH(tcpH);
 
         //发送TCP数据报
-        udt_send(tcpPack);
-        flag = 0;
+        sendWindow.sendPacket(tcpPack);
+//        flag = 0;
 
-        reTransTask = new UDT_RetransTask(client,tcpPack);
-        timer.schedule(reTransTask, TIMEOUT);
         //等待ACK报文
         //waitACK();
-        while (flag==0);
+//        while (flag==0);
     }
 
     @Override
@@ -67,8 +63,6 @@ public class TCP_Sender extends TCP_Sender_ADT {
             // System.out.println("CurrentAck: "+currentAck);
             if (currentAck == tcpPack.getTcpH().getTh_seq()){
                 System.out.println("Clear: "+tcpPack.getTcpH().getTh_seq());
-                timer.cancel();
-                timer = new UDT_Timer();
                 flag = 1;
                 //break;
             }else{
@@ -82,11 +76,15 @@ public class TCP_Sender extends TCP_Sender_ADT {
     @Override
     //接收到ACK报文：检查校验和，将确认号插入ack队列;NACK的确认号为－1；不需要修改
     public void recv(TCP_PACKET recvPack) {
-        System.out.println("Receive ACK Number： "+ recvPack.getTcpH().getTh_ack());
-        ackQueue.add(recvPack.getTcpH().getTh_ack());
-        System.out.println();
+        if(recvPack.getTcpH().getTh_sum() == CheckSum.computeChkSum(recvPack)) {
+            int thAck = recvPack.getTcpH().getTh_ack();
+            System.out.println("Receive ACK Number： " + thAck);
+            System.out.println();
+            sendWindow.onAck(thAck);
+            flag = 1;
+        }
         //处理ACK报文
-        waitACK();
+//        waitACK();Ò
 
     }
 
