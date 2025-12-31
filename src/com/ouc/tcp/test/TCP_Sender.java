@@ -11,7 +11,7 @@ import com.ouc.tcp.message.*;
 public class TCP_Sender extends TCP_Sender_ADT {
 
     private TCP_PACKET tcpPack;	//待发送的TCP数据报
-    private volatile int flag = 0;
+    private volatile int flag = 1;
     private SendWindow sendWindow;
 
     /*构造函数*/
@@ -24,7 +24,6 @@ public class TCP_Sender extends TCP_Sender_ADT {
     @Override
     //可靠发送（应用层调用）：封装应用层数据，产生TCP数据报；需要修改
     public void rdt_send(int dataIndex, int[] appData) {
-        while(!sendWindow.IsSendable());
 
         //生成TCP数据报（设置序号和数据字段/校验和),注意打包的顺序
         tcpH.setTh_seq(dataIndex * appData.length + 1);//包序号设置为字节流号：
@@ -33,9 +32,20 @@ public class TCP_Sender extends TCP_Sender_ADT {
         //更新带有checksum的TCP 报文头
         tcpH.setTh_sum(CheckSum.computeChkSum(tcpPack));
         tcpPack.setTcpH(tcpH);
+        if(!sendWindow.isWindowAvailable()){
+            System.out.println("Window is not available");
+            flag = 0;
+        }
 
+        while(flag == 0);
         //发送TCP数据报
-        sendWindow.sendPacket(tcpPack);
+        try {
+            sendWindow.putPacket(tcpPack.clone());
+        } catch (CloneNotSupportedException e) {
+            throw new RuntimeException(e);
+        }
+        udt_send(tcpPack);
+
 //        flag = 0;
 
         //等待ACK报文
@@ -81,7 +91,9 @@ public class TCP_Sender extends TCP_Sender_ADT {
             System.out.println("Receive ACK Number： " + thAck);
             System.out.println();
             sendWindow.onAck(thAck);
-            flag = 1;
+            if(sendWindow.isWindowAvailable()){
+                flag = 1;
+            }
         }
         //处理ACK报文
 //        waitACK();Ò
