@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class SendWindow {
+
     private static final int SEG_SIZE = 100;
     private static final int WINDOW_SIZE = 8 * SEG_SIZE;
     private static final int TIMEOUT = 300;
@@ -16,104 +17,114 @@ public class SendWindow {
     private int sendBase = 1;
     private int nextSeq = 1;
 
-    // 发送缓存：按序号索引，存储所有未确认分组
-    private final Map<Integer, TCP_PACKET> buffer = new HashMap<>();
+    // SR 发送窗口
+    private final Map<Integer, SendEntry> window = new HashMap<>();
 
-    private UDT_Timer timer = new UDT_Timer();
     private final Client client;
 
     public SendWindow(Client client) {
         this.client = client;
     }
 
-    /* ===================== 发送侧接口 ===================== */
+    /* ===================== 窗口判断 ===================== */
 
     public boolean isWindowAvailable() {
         return nextSeq < sendBase + WINDOW_SIZE;
     }
 
-    public boolean putPacket(TCP_PACKET pkt) {
+    /* ===================== 放入窗口（不发送） ===================== */
+
+    public void putPacket(TCP_PACKET pkt) {
         if (pkt == null || !isWindowAvailable()) {
-            return false;
+            return;
         }
 
         int seq = pkt.getTcpH().getTh_seq();
-
         if (seq != nextSeq) {
-            return false;
+            return;
         }
 
-        buffer.put(seq, pkt);
+        SendEntry entry = new SendEntry(pkt);
+        window.put(seq, entry);
 
-        if (sendBase == nextSeq) {
-            startTimer();   // 仅在窗口从空变非空时启动
-        }
+        entry.startTimer();
 
         nextSeq += SEG_SIZE;
-        return true;
     }
 
-    /* ===================== ACK 处理 ===================== */
+    /* ===================== ACK 处理（SR） ===================== */
 
     public void onAck(int ack) {
 
-        if (ack <= sendBase || ack > nextSeq) {
+        SendEntry entry = window.get(ack);
+        if (entry == null || entry.acked) {
             return;
         }
 
-        // 删除所有 seq < ack 的分组
-        for (int seq = sendBase; seq < ack; seq += SEG_SIZE) {
-            buffer.remove(seq);
-        }
+        entry.acked = true;
+        entry.stopTimer();
 
-        sendBase = ack;
-
-        if (sendBase >= nextSeq) {
-            timer.cancel();   // 窗口空，停表
-            nextSeq = ack;
-        } else {
-            startTimer();     // 窗口仍有未确认数据
+        // SR：只能滑动到第一个未确认分组
+        while (window.containsKey(sendBase) && window.get(sendBase).acked) {
+            window.remove(sendBase);
+            sendBase += SEG_SIZE;
         }
     }
 
+    /* ===================== 单个分组状态 ===================== */
 
-    /* ===================== 超时重传 ===================== */
+    private class SendEntry {
+        TCP_PACKET packet;
+        boolean acked;
+        UDT_Timer timer;
 
-    public void retransmitAllUnAckedPackets() {
-        //解决程序结束后仍然发送的问题（屎，但是管用）
-        if(nextSeq == 100001)
-            return;
-        if(sendBase == nextSeq)
-            return;
-        System.out.println("Timer fired, base=" + sendBase + ", next=" + nextSeq);
-        System.out.println("Timeout, resend from byte: " + sendBase);
+        SendEntry(TCP_PACKET packet) {
+            this.packet = packet;
+            this.acked = false;
+        }
 
-        for (int seq = sendBase; seq < nextSeq; seq += SEG_SIZE) {
-            TCP_PACKET pkt = buffer.get(seq);
-            if (pkt != null) {
-                client.send(pkt);
+        void startTimer() {
+            timer = new UDT_Timer();
+            timer.schedule(
+                    new RetransTask(packet),
+                    TIMEOUT
+            );
+        }
+
+        void stopTimer() {
+            if (timer != null) {
+                timer.cancel();
             }
         }
-        startTimer();
     }
 
-
-    private void startTimer() {
-        timer.cancel();
-        timer = new UDT_Timer();
-        timer.schedule(new RetransTask(), TIMEOUT);
-    }
-
-    /* ===================== 定时器任务 ===================== */
+    /* ===================== 超时任务（仅该分组） ===================== */
 
     private class RetransTask extends UDT_RetransTask {
-        public RetransTask() {
-            super(client, null);
+
+        private final TCP_PACKET packet;
+
+        public RetransTask(TCP_PACKET packet) {
+            super(client, packet);
+            this.packet = packet;
         }
 
         @Override
         public void run() {
-            retransmitAllUnAckedPackets();
+            int seq = packet.getTcpH().getTh_seq();
+            SendEntry entry = window.get(seq);
+
+            if (entry == null || entry.acked) {
+                return;
+            }
+
+            System.out.println("Timeout, resend seq = " + seq);
+
+            // ⚠️ 只重传该包
+            client.send(packet);
+
+            // 重启该包自己的定时器
+            entry.startTimer();
         }
     }
 }

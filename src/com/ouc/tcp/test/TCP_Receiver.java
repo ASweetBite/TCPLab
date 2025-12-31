@@ -17,12 +17,13 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     int sequence = 1;//用于记录当前待接收的包序号，注意包序号不完全是
     int expSeq = 1;
     int lastSeq = 0;
-
+    ReceiveWindow receiveWindow;
 
     /*构造函数*/
     public TCP_Receiver() {
         super();    //调用超类构造函数
         super.initTCP_Receiver(this);    //初始化TCP接收端
+        receiveWindow = new ReceiveWindow();
     }
 
     @Override

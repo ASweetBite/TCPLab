@@ -12,7 +12,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
 
     private TCP_PACKET tcpPack;	//待发送的TCP数据报
     private volatile int flag = 1;
-    private SendWindow sendWindow;
+    private final SendWindow sendWindow;
 
     /*构造函数*/
     public TCP_Sender() {
