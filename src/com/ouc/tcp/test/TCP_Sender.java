@@ -24,7 +24,11 @@ public class TCP_Sender extends TCP_Sender_ADT {
     @Override
     //可靠发送（应用层调用）：封装应用层数据，产生TCP数据报；需要修改
     public void rdt_send(int dataIndex, int[] appData) {
-
+        if(!sendWindow.isWindowAvailable()){
+            System.out.println("Window is not available");
+            flag = 0;
+        }
+        while(flag == 0);
         //生成TCP数据报（设置序号和数据字段/校验和),注意打包的顺序
         tcpH.setTh_seq(dataIndex * appData.length + 1);//包序号设置为字节流号：
         tcpS.setData(appData);
@@ -32,12 +36,9 @@ public class TCP_Sender extends TCP_Sender_ADT {
         //更新带有checksum的TCP 报文头
         tcpH.setTh_sum(CheckSum.computeChkSum(tcpPack));
         tcpPack.setTcpH(tcpH);
-        if(!sendWindow.isWindowAvailable()){
-            System.out.println("Window is not available");
-            flag = 0;
-        }
 
-        while(flag == 0);
+
+
         //发送TCP数据报
         try {
             sendWindow.putPacket(tcpPack.clone());
@@ -57,7 +58,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
     //不可靠发送：将打包好的TCP数据报通过不可靠传输信道发送；仅需修改错误标志
     public void udt_send(TCP_PACKET stcpPack) {
         //设置错误控制标志
-        tcpH.setTh_eflag((byte)3);  //eFlag = 0，信道无错误，发送方像接收方发送数据时不会产生位错
+        tcpH.setTh_eflag((byte)7);  //eFlag = 0，信道无错误，发送方像接收方发送数据时不会产生位错
         //System.out.println("to send: "+stcpPack.getTcpH().getTh_seq());
         //发送数据报
         client.send(stcpPack);
