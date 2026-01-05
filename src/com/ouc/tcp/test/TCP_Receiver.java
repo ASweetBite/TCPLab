@@ -15,7 +15,6 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     private static final int PAYLOAD_SIZE = 100;
     private TCP_PACKET ackPack;    //回复的ACK报文段
     int sequence = 1;//用于记录当前待接收的包序号，注意包序号不完全是
-    int expSeq = 1;
     int lastSeq = 0;
     ReceiveWindow receiveWindow;
 
@@ -42,7 +41,6 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
             //将接收到的正确有序的数据插入data队列，准备交付
 //            dataQueue.add(recvPack.getTcpS().getData());
             lastSeq = recvSeq;
-            expSeq += PAYLOAD_SIZE;
             sequence++;
 
         } else {
@@ -106,7 +104,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
         7.出错 / 丢包 / 延迟
          */
         //设置错误控制标志
-        tcpH.setTh_eflag((byte) 4);    //eFlag = 0，信道无错误，接收方向发送方发送ACK或NACK信息时不会出现错误
+        tcpH.setTh_eflag((byte) 3);    //eFlag = 0，信道无错误，接收方向发送方发送ACK或NACK信息时不会出现错误
         //发送数据报
         client.send(replyPack);
     }
