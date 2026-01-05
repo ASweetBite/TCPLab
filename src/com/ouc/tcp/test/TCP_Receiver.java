@@ -31,8 +31,8 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     public void rdt_recv(TCP_PACKET recvPack) {
         //检查校验码，生成ACK
         int recvSeq = recvPack.getTcpH().getTh_seq();
-        if (CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum() &&
-                recvSeq == expSeq) {
+        if (CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()
+                && receiveWindow.onPacket(recvPack)) {
             //生成ACK报文段（设置确认号）
             tcpH.setTh_ack(recvPack.getTcpH().getTh_seq());
             ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
@@ -40,7 +40,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
             //回复ACK报文段
             reply(ackPack);
             //将接收到的正确有序的数据插入data队列，准备交付
-            dataQueue.add(recvPack.getTcpS().getData());
+//            dataQueue.add(recvPack.getTcpS().getData());
             lastSeq = recvSeq;
             expSeq += PAYLOAD_SIZE;
             sequence++;
@@ -60,8 +60,8 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
 
 
         //交付数据（每20组数据交付一次）
-        if (dataQueue.size() == 20)
-            deliver_data();
+//        if (dataQueue.size() == 20)
+//            deliver_data();
     }
 
     @Override

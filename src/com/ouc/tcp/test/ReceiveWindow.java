@@ -56,6 +56,8 @@ public class ReceiveWindow {
             dataQueue.add(pkt.getTcpS().getData());
             rcvBase += SEG_SIZE;
         }
+        if (dataQueue.size() == 20 || rcvBase == 100001)
+            deliver_data();
     }
 
 
@@ -72,8 +74,8 @@ public class ReceiveWindow {
                 int[] data = dataQueue.poll();
 
                 //将数据写入文件
-                for (int i = 0; i < data.length; i++) {
-                    writer.write(data[i] + "\n");
+                for (int datum : data) {
+                    writer.write(datum + "\n");
                 }
 
                 writer.flush();        //清空输出缓存
