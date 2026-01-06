@@ -47,6 +47,7 @@ public class ReceiveWindow {
         }
 
         /* ---------- 窗口右侧 ---------- */
+        System.out.println("[Receive Window is full]: rcvBase=" + rcvBase + ", seq=" + seq);
         return false;
     }
 
@@ -62,6 +63,9 @@ public class ReceiveWindow {
             deliver_data();
     }
 
+    public int getRcvBase() {
+        return rcvBase;
+    }
 
     private void deliver_data() {
         //检查dataQueue，将数据写入文件
