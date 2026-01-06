@@ -34,9 +34,11 @@ public class ReceiveWindow {
                 buffer.put(seq, pkt);
             }
 
-            if(seq == rcvBase)
+            if(seq == rcvBase) {
                 slideWindow();
-            return true;
+                return true;
+            }
+            return false;
         }
 
         /* ---------- 已接收过（窗口左侧） ---------- */

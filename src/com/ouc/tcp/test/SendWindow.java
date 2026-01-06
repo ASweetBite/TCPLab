@@ -11,7 +11,7 @@ import java.util.Map;
 public class SendWindow {
 
     private static final int SEG_SIZE = 100;   // MSS（字节）
-    private static final int TIMEOUT = 300;
+    private static final int TIMEOUT = 500;
 
     /* ===== 拥塞控制参数（单位：字节） ===== */
     private int cwnd = SEG_SIZE;               // 初始 1 MSS
@@ -20,6 +20,9 @@ public class SendWindow {
     /* ===== SR 窗口指针（字节序号） ===== */
     private int sendBase = 1;
     private int nextSeq = 1;
+    /* ===== Reno 新增状态 ===== */
+    private int dupAckCount = 0;
+    private boolean inFastRecovery = false;
 
     private UDT_Timer timer = null;
 
@@ -59,27 +62,73 @@ public class SendWindow {
 
     /* ===================== ACK 处理（SR） ===================== */
     public void onAck(int ack) {
-        SendEntry entry = window.get(ack);
-        if (entry == null || entry.acked) {
+
+        /* ===== 1. ACK 落后，忽略 ===== */
+        if (ack < sendBase - SEG_SIZE) {
             return;
         }
 
-        entry.acked = true;
+        /* ===== 2. 重复 ACK（ack == sendBase - 1） ===== */
+        if (ack == sendBase - SEG_SIZE) {
+            dupAckCount++;
+            System.out.println("[DupACK] count = " + dupAckCount);
 
-        /* ===== TCP 拥塞控制 ===== */
-        if (cwnd < ssthresh) {
-            // 慢启动：每个 ACK 增加 1 MSS
-            cwnd += SEG_SIZE;
-            System.out.println("[Slow Start] cwnd = " + cwnd / SEG_SIZE);
-        } else {
-            // 拥塞避免：cwnd += MSS*MSS / cwnd
-            cwnd += (SEG_SIZE * SEG_SIZE) / cwnd;
-            System.out.println("[Congestion Avoidance] cwnd = " + cwnd / SEG_SIZE);
+            /* ===== 快重传触发 ===== */
+            if (dupAckCount >= 3 && !inFastRecovery) {
+                System.out.println("[Fast Retransmit] at seq = " + sendBase);
+
+                /* Reno 拥塞控制 */
+                ssthresh = Math.max((cwnd / 2 / SEG_SIZE) * SEG_SIZE, SEG_SIZE);
+                cwnd = ssthresh;
+                inFastRecovery = true;
+
+                /* 立即重传 sendBase */
+                SendEntry entry = window.get(sendBase);
+                if (entry != null) {
+                    client.send(entry.packet);
+                }
+            }
+            /* 快恢复期间：每个额外 DupACK 膨胀 cwnd */
+            else if (inFastRecovery) {
+                cwnd += SEG_SIZE ;
+                System.out.println("[Fast Recovery] cwnd inflate = " + cwnd / SEG_SIZE);
+            }
+            return;
         }
 
-        // 调用公共方法推进窗口（替代原有的硬编码逻辑）
+        /* ===== 3. 新 ACK（ack >= sendBase） ===== */
+
+        dupAckCount = 0;
+
+        int seq = sendBase;
+        while (seq <= ack) {
+            SendEntry e = window.get(seq);
+            if (e != null) {
+                e.acked = true;
+            }
+            seq += SEG_SIZE;
+        }
+
+
+        /* ===== 如果在快恢复，退出 ===== */
+        if (inFastRecovery) {
+            cwnd = ssthresh;
+            inFastRecovery = false;
+            System.out.println("[Exit Fast Recovery] cwnd = " + cwnd / SEG_SIZE);
+        } else {
+            /* 正常 Reno：慢启动 / 拥塞避免 */
+            if (cwnd < ssthresh) {
+                cwnd += SEG_SIZE;
+                System.out.println("[Slow Start] cwnd = " + cwnd / SEG_SIZE);
+            } else {
+                cwnd += (SEG_SIZE * SEG_SIZE) / cwnd;
+                System.out.println("[Congestion Avoidance] cwnd = " + cwnd / SEG_SIZE);
+            }
+        }
+
         advanceSendBase();
     }
+
 
     /* ===================== 公共方法：推进 SendBase（滑动窗口核心逻辑） ===================== */
     private void advanceSendBase() {
