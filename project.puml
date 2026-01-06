@@ -1,0 +1,33 @@
+@startuml
+class com.ouc.tcp.test.TCP_Receiver {
+- TCP_PACKET ackPack
+~ int sequence
++ void rdt_recv(TCP_PACKET)
++ void deliver_data()
++ void reply(TCP_PACKET)
+}
+
+
+class com.ouc.tcp.test.TCP_Sender {
+- TCP_PACKET tcpPack
+- int flag
++ void rdt_send(int,int[])
++ void udt_send(TCP_PACKET)
++ void waitACK()
++ void recv(TCP_PACKET)
+}
+
+
+class com.ouc.tcp.test.CheckSum {
++ {static} short computeChkSum(TCP_PACKET)
+}
+
+class com.ouc.tcp.test.TestRun {
++ {static} void main(String[])
+}
+
+
+
+com.ouc.tcp.client.TCP_Receiver_ADT <|-- com.ouc.tcp.test.TCP_Receiver
+com.ouc.tcp.client.TCP_Sender_ADT <|-- com.ouc.tcp.test.TCP_Sender
+@enduml
