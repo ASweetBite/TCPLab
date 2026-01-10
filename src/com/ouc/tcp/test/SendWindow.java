@@ -4,7 +4,6 @@ import com.ouc.tcp.client.Client;
 import com.ouc.tcp.client.UDT_RetransTask;
 import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.TCP_PACKET;
-
 import java.util.HashMap;
 import java.util.Map;
 
@@ -12,13 +11,10 @@ public class SendWindow {
     private static final int SEG_SIZE = 100;
     private static final int WINDOW_SIZE = 32 * SEG_SIZE;
     private static final int TIMEOUT = 1000;
-
     private int sendBase = 1;
     private int nextSeq = 1;
-
     // 发送缓存：按序号索引，存储所有未确认分组
     private final Map<Integer, TCP_PACKET> buffer = new HashMap<>();
-
     private UDT_Timer timer = new UDT_Timer();
     private final Client client;
 
@@ -36,33 +32,25 @@ public class SendWindow {
         if (pkt == null || !isWindowAvailable()) {
             return;
         }
-
         int seq = pkt.getTcpH().getTh_seq();
-
         buffer.put(seq, pkt);
-
         if (sendBase == nextSeq) {
             startTimer();   // 仅在窗口从空变非空时启动
         }
-
         nextSeq = seq + SEG_SIZE;
     }
 
     /* ===================== ACK 处理 ===================== */
 
     public void onAck(int ack) {
-
         if (ack < sendBase || ack > nextSeq) {
             return;
         }
-
         // 删除所有 seq <= ack 的分组
         for (int seq = sendBase; seq <= ack; seq += SEG_SIZE) {
             buffer.remove(seq);
         }
-
         sendBase = ack + SEG_SIZE;
-
         if (sendBase >= nextSeq) {
             timer.cancel();   // 窗口空，停表
             nextSeq = sendBase;
@@ -105,7 +93,6 @@ public class SendWindow {
         public RetransTask() {
             super(client, null);
         }
-
         @Override
         public void run() {
             retransmitAllUnAckedPackets();
