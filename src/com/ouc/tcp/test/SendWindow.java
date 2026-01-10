@@ -10,8 +10,8 @@ import java.util.Map;
 
 public class SendWindow {
     private static final int SEG_SIZE = 100;
-    private static final int WINDOW_SIZE = 8 * SEG_SIZE;
-    private static final int TIMEOUT = 300;
+    private static final int WINDOW_SIZE = 32 * SEG_SIZE;
+    private static final int TIMEOUT = 1000;
 
     private int sendBase = 1;
     private int nextSeq = 1;
@@ -32,16 +32,12 @@ public class SendWindow {
         return nextSeq < sendBase + WINDOW_SIZE;
     }
 
-    public boolean putPacket(TCP_PACKET pkt) {
+    public void putPacket(TCP_PACKET pkt) {
         if (pkt == null || !isWindowAvailable()) {
-            return false;
+            return;
         }
 
         int seq = pkt.getTcpH().getTh_seq();
-
-        if (seq != nextSeq) {
-            return false;
-        }
 
         buffer.put(seq, pkt);
 
@@ -49,28 +45,27 @@ public class SendWindow {
             startTimer();   // 仅在窗口从空变非空时启动
         }
 
-        nextSeq += SEG_SIZE;
-        return true;
+        nextSeq = seq + SEG_SIZE;
     }
 
     /* ===================== ACK 处理 ===================== */
 
     public void onAck(int ack) {
 
-        if (ack <= sendBase || ack > nextSeq) {
+        if (ack < sendBase || ack > nextSeq) {
             return;
         }
 
-        // 删除所有 seq < ack 的分组
-        for (int seq = sendBase; seq < ack; seq += SEG_SIZE) {
+        // 删除所有 seq <= ack 的分组
+        for (int seq = sendBase; seq <= ack; seq += SEG_SIZE) {
             buffer.remove(seq);
         }
 
-        sendBase = ack;
+        sendBase = ack + SEG_SIZE;
 
         if (sendBase >= nextSeq) {
             timer.cancel();   // 窗口空，停表
-            nextSeq = ack;
+            nextSeq = sendBase;
         } else {
             startTimer();     // 窗口仍有未确认数据
         }
@@ -80,10 +75,10 @@ public class SendWindow {
     /* ===================== 超时重传 ===================== */
 
     public void retransmitAllUnAckedPackets() {
-        //解决程序结束后仍然发送的问题（屎，但是管用）
-        if(nextSeq == 100001)
+        //解决程序结束后仍然发送的问题
+        if (nextSeq == 100001)
             return;
-        if(sendBase == nextSeq)
+        if (sendBase == nextSeq)
             return;
         System.out.println("Timer fired, base=" + sendBase + ", next=" + nextSeq);
         System.out.println("Timeout, resend from byte: " + sendBase);

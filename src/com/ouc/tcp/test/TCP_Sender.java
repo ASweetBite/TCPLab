@@ -96,7 +96,7 @@ public class TCP_Sender extends TCP_Sender_ADT {
             }
         }
         //处理ACK报文
-//        waitACK();Ò
+//        waitACK();
 
     }
 
