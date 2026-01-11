@@ -85,6 +85,11 @@ public class SendWindow {
             else if (inFastRecovery) {
                 cwnd += SEG_SIZE ;
                 System.out.println("[Fast Recovery] cwnd inflate = " + cwnd / SEG_SIZE);
+                /* 立即重传 sendBase */
+                SendEntry entry = window.get(sendBase);
+                if (entry != null) {
+                    client.send(entry.packet);
+                }
             }
             return;
         }
