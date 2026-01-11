@@ -11,7 +11,7 @@ import java.util.Map;
 public class SendWindow {
 
     private static final int SEG_SIZE = 100;   // MSS（字节）
-    private static final int TIMEOUT = 500;
+    private static final int TIMEOUT = 1000;
 
     /* ===== 拥塞控制参数（单位：字节） ===== */
     private int cwnd = SEG_SIZE;               // 初始 1 MSS
@@ -62,26 +62,19 @@ public class SendWindow {
 
     /* ===================== ACK 处理（SR） ===================== */
     public void onAck(int ack) {
-
-        /* ===== 1. ACK 落后，忽略 ===== */
         if (ack < sendBase - SEG_SIZE) {
             return;
         }
-
-        /* ===== 2. 重复 ACK（ack == sendBase - 1） ===== */
         if (ack == sendBase - SEG_SIZE) {
             dupAckCount++;
             System.out.println("[DupACK] count = " + dupAckCount);
-
             /* ===== 快重传触发 ===== */
             if (dupAckCount >= 3 && !inFastRecovery) {
                 System.out.println("[Fast Retransmit] at seq = " + sendBase);
-
                 /* Reno 拥塞控制 */
                 ssthresh = Math.max((cwnd / 2 / SEG_SIZE) * SEG_SIZE, SEG_SIZE);
                 cwnd = ssthresh;
                 inFastRecovery = true;
-
                 /* 立即重传 sendBase */
                 SendEntry entry = window.get(sendBase);
                 if (entry != null) {
@@ -95,11 +88,8 @@ public class SendWindow {
             }
             return;
         }
-
-        /* ===== 3. 新 ACK（ack >= sendBase） ===== */
-
+        // 收到新 ACK
         dupAckCount = 0;
-
         int seq = sendBase;
         while (seq <= ack) {
             SendEntry e = window.get(seq);
@@ -108,8 +98,6 @@ public class SendWindow {
             }
             seq += SEG_SIZE;
         }
-
-
         /* ===== 如果在快恢复，退出 ===== */
         if (inFastRecovery) {
             cwnd = ssthresh;
@@ -139,7 +127,7 @@ public class SendWindow {
             window.remove(sendBase);  // 移除已确认的包，释放窗口资源
             sendBase += SEG_SIZE;     // 推进窗口基址（移动窗口）
             baseMoved = true;
-            System.out.println("[Window Advanced] New sendBase = " + sendBase);
+            System.out.println("[Window Advanced] New sendBase = " + sendBase + ",nextSeq = " + nextSeq);
         }
 
         // 仅在窗口基址移动时处理定时器

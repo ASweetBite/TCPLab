@@ -15,7 +15,7 @@ public class TCP_Receiver extends TCP_Receiver_ADT {
     private static final int SEG_SIZE = 100;
     private TCP_PACKET ackPack;    //回复的ACK报文段
     int sequence = 1;//用于记录当前待接收的包序号，注意包序号不完全是
-    int lastSeq = 0;
+    int lastSeq = 1;
     ReceiveWindow receiveWindow;
 
     /*构造函数*/

@@ -37,8 +37,6 @@ public class TCP_Sender extends TCP_Sender_ADT {
         tcpH.setTh_sum(CheckSum.computeChkSum(tcpPack));
         tcpPack.setTcpH(tcpH);
 
-
-
         //发送TCP数据报
         try {
             sendWindow.putPacket(tcpPack.clone());
