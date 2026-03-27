@@ -5,6 +5,11 @@ import com.ouc.tcp.client.UDT_RetransTask;
 import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.TCP_PACKET;
 
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -17,29 +22,54 @@ public class SendWindow {
     private int cwnd = SEG_SIZE;               // 初始 1 MSS
     private int ssthresh = 16 * SEG_SIZE;
 
-    /* ===== SR 窗口指针（字节序号） ===== */
+    /* ===== 窗口指针（字节序号） ===== */
     private int sendBase = 1;
     private int nextSeq = 1;
-    /* ===== Reno 新增状态 ===== */
     private int dupAckCount = 0;
     private boolean inFastRecovery = false;
 
     private UDT_Timer timer = null;
-
-    /* SR 发送窗口 */
     private final Map<Integer, SendEntry> window = new HashMap<>();
     private final Client client;
 
+    // ===== 日志记录器 =====
+    private PrintWriter logWriter;
+    private final SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss:SSS");
+
     public SendWindow(Client client) {
         this.client = client;
+        try {
+            // 日志保存在项目根目录
+            logWriter = new PrintWriter(new FileWriter("tcp_reno.log", false));
+            logState("INIT", "Window Initialized");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
-    /* ===================== 窗口是否可用 ===================== */
+    /**
+     * 核心日志记录方法
+     * 格式：时间 事件 seq base nextSeq cwnd ssthresh 状态 附加信息
+     */
+    private void logState(String event, String info) {
+        String timestamp = sdf.format(new Date());
+        String stateStr = inFastRecovery ? "FastRecovery" : (cwnd < ssthresh ? "SlowStart" : "CongAvoid");
+
+        // 打印到控制台（保留你原有的习惯）
+        System.out.println("[" + event + "] " + info + " | cwnd:" + cwnd/SEG_SIZE + " ssthresh:" + ssthresh/SEG_SIZE);
+
+        // 写入文件 (使用制表符或固定格式便于后续解析)
+        if (logWriter != null) {
+            logWriter.printf("%s\tEVENT:%-15s\tbase:%-8d\tnext:%-8d\tcwnd:%-6d\tssthresh:%-6d\tstate:%-12s\tinfo:%s\n",
+                    timestamp, event, sendBase, nextSeq, cwnd, ssthresh, stateStr, info);
+            logWriter.flush();
+        }
+    }
+
     public boolean isWindowAvailable() {
         return nextSeq < sendBase + cwnd;
     }
 
-    /* ===================== 放入窗口并发送 ===================== */
     public void putPacket(TCP_PACKET pkt) {
         if (pkt == null || !isWindowAvailable()) {
             return;
@@ -54,38 +84,40 @@ public class SendWindow {
         window.put(seq, entry);
 
         if (sendBase == nextSeq) {
-            startTimer();     // 只有 base 包启动定时器
+            startTimer();
         }
 
         nextSeq += SEG_SIZE;
+        logState("SEND", "DATA_seq: " + seq);
     }
 
-    /* ===================== ACK 处理（SR） ===================== */
     public void onAck(int ack) {
         if (ack < sendBase - SEG_SIZE) {
             return;
         }
+
+        // 处理重复 ACK (DupACK)
         if (ack == sendBase - SEG_SIZE) {
             dupAckCount++;
-            System.out.println("[DupACK] count = " + dupAckCount);
-            /* ===== 快重传触发 ===== */
+            logState("DUP_ACK", "AckNum: " + ack + " count: " + dupAckCount);
+
             if (dupAckCount >= 3 && !inFastRecovery) {
-                System.out.println("[Fast Retransmit] at seq = " + sendBase);
-                /* Reno 拥塞控制 */
+                // 进入快重传/快恢复
                 ssthresh = Math.max((cwnd / 2 / SEG_SIZE) * SEG_SIZE, SEG_SIZE);
-                cwnd = ssthresh;
+                cwnd = ssthresh + 3 * SEG_SIZE; // Reno 标准：进入快恢复时 cwnd 膨胀
                 inFastRecovery = true;
-                /* 立即重传 sendBase */
+
+                logState("FAST_RETRANS", "Retransmit seq: " + sendBase);
+
                 SendEntry entry = window.get(sendBase);
                 if (entry != null) {
                     client.send(entry.packet);
                 }
             }
-            /* 快恢复期间：每个额外 DupACK 膨胀 cwnd */
             else if (inFastRecovery) {
-                cwnd += SEG_SIZE ;
-                System.out.println("[Fast Recovery] cwnd inflate = " + cwnd / SEG_SIZE);
-                /* 立即重传 sendBase */
+                cwnd += SEG_SIZE; // 每收到一个多余的 DupACK，窗口膨胀 1 MSS
+                logState("FR_INFLATE", "Fast Recovery cwnd inflate");
+
                 SendEntry entry = window.get(sendBase);
                 if (entry != null) {
                     client.send(entry.packet);
@@ -93,8 +125,12 @@ public class SendWindow {
             }
             return;
         }
-        // 收到新 ACK
+
+        // 收到新的 ACK (New ACK)
+        logState("NEW_ACK", "AckNum: " + ack);
         dupAckCount = 0;
+
+        // 累计确认逻辑
         int seq = sendBase;
         while (seq <= ack) {
             SendEntry e = window.get(seq);
@@ -103,53 +139,46 @@ public class SendWindow {
             }
             seq += SEG_SIZE;
         }
-        /* ===== 如果在快恢复，退出 ===== */
+
         if (inFastRecovery) {
+            // 收到新确认，退出快恢复
             cwnd = ssthresh;
             inFastRecovery = false;
-            System.out.println("[Exit Fast Recovery] cwnd = " + cwnd / SEG_SIZE);
+            logState("EXIT_FR", "Exit Fast Recovery");
         } else {
-            /* 正常 Reno：慢启动 / 拥塞避免 */
+            // 正常拥塞控制更新
             if (cwnd < ssthresh) {
-                cwnd += SEG_SIZE;
-                System.out.println("[Slow Start] cwnd = " + cwnd / SEG_SIZE);
+                cwnd += SEG_SIZE; // 慢启动
             } else {
-                cwnd += (SEG_SIZE * SEG_SIZE) / cwnd;
-                System.out.println("[Congestion Avoidance] cwnd = " + cwnd / SEG_SIZE);
+                cwnd += (SEG_SIZE * SEG_SIZE) / cwnd; // 拥塞避免
             }
         }
 
         advanceSendBase();
     }
 
-
-    /* ===================== 公共方法：推进 SendBase（滑动窗口核心逻辑） ===================== */
     private void advanceSendBase() {
         boolean baseMoved = false;
+        int oldBase = sendBase;
 
-        // 循环检查并推进 sendBase：只要 sendBase 对应的包已被确认，就滑动窗口
         while (window.containsKey(sendBase) && window.get(sendBase).acked) {
-            window.remove(sendBase);  // 移除已确认的包，释放窗口资源
-            sendBase += SEG_SIZE;     // 推进窗口基址（移动窗口）
+            window.remove(sendBase);
+            sendBase += SEG_SIZE;
             baseMoved = true;
-            System.out.println("[Window Advanced] New sendBase = " + sendBase + ",nextSeq = " + nextSeq);
         }
 
-        // 仅在窗口基址移动时处理定时器
         if (baseMoved) {
+            logState("WINDOW_SLIDE", "Base: " + oldBase + " -> " + sendBase);
             stopTimer();
-            // 窗口不为空时，为新的 sendBase 启动定时器
             if (!window.isEmpty()) {
                 startTimer();
             }
         }
     }
 
-    /* ===================== 定时器控制 ===================== */
     private void startTimer() {
         stopTimer();
         timer = new UDT_Timer();
-        // 传入当前 sendBase 对应的包到定时器任务（修复原 null 问题）
         SendEntry entry = window.get(sendBase);
         TCP_PACKET basePkt = entry != null ? entry.packet : null;
         timer.schedule(new RetransTask(basePkt), TIMEOUT);
@@ -162,43 +191,32 @@ public class SendWindow {
         }
     }
 
-    /* ===================== 单个分组状态 ===================== */
     private static class SendEntry {
         TCP_PACKET packet;
         boolean acked = false;
-
-        SendEntry(TCP_PACKET packet) {
-            this.packet = packet;
-        }
+        SendEntry(TCP_PACKET packet) { this.packet = packet; }
     }
 
-    /* ===================== 超时重传（修复：重传后滑动窗口） ===================== */
     private class RetransTask extends UDT_RetransTask {
-
-        public RetransTask(TCP_PACKET pkt) {
-            super(client, pkt);  // 传入有效数据包，修复原 null 问题
-        }
+        public RetransTask(TCP_PACKET pkt) { super(client, pkt); }
 
         @Override
         public void run() {
-            System.out.println("Timeout at sendBase = " + sendBase);
+            logState("TIMEOUT", "Timeout at base: " + sendBase);
 
-            /* ===== TCP 拥塞控制：超时 ===== */
-            int half = cwnd / 2;
-            ssthresh = Math.max(half, SEG_SIZE);
-            cwnd = SEG_SIZE;
-            System.out.println("[Timeout Congestion Control] ssthresh = " + ssthresh / SEG_SIZE + ", cwnd = " + cwnd / SEG_SIZE);
+            ssthresh = Math.max((cwnd / 2 / SEG_SIZE) * SEG_SIZE, SEG_SIZE);
+            cwnd = SEG_SIZE; // 超时回到 1 MSS
+            inFastRecovery = false;
+            dupAckCount = 0;
 
-            /* ===== SR：重传 sendBase 对应的包 ===== */
             SendEntry entry = window.get(sendBase);
             if (entry != null) {
                 client.send(entry.packet);
-                System.out.println("[Retransmit] Sent sendBase packet: " + sendBase);
+                logState("RETRANSMIT", "Resend Base: " + sendBase);
             }
 
-            advanceSendBase();  // 调用公共窗口推进方法，尝试滑动窗口
-
-            /* ===== 仅在窗口不为空时重启定时器（避免无效定时器） ===== */
+            // 注意：超时不应该立刻 advanceSendBase，而是重传后再等待 ACK
+            // 除非逻辑要求，否则通常超时只重传不滑动
             if (!window.isEmpty()) {
                 startTimer();
             }
