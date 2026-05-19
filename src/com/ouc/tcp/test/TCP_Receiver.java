@@ -7,103 +7,92 @@ import java.io.IOException;
 
 import com.ouc.tcp.client.TCP_Receiver_ADT;
 import com.ouc.tcp.message.*;
-import com.ouc.tcp.tool.TCP_TOOL;
 
 public class TCP_Receiver extends TCP_Receiver_ADT {
     private static final int SEG_SIZE = 100;
-    private TCP_PACKET ackPack;    //回复的ACK报文段
-    int sequence = 1;//用于记录当前待接收的包序号，注意包序号不完全是
+
+    private final TcpLabConfig config = TcpLabConfig.get();
+
+    private TCP_PACKET ackPack;    // 回复的 ACK 报文段
+    int sequence = 1;              // 用于记录当前待接收的包序号
     int lastSeq = 1;
     ReceiveWindow receiveWindow;
 
     /*构造函数*/
     public TCP_Receiver() {
-        super();    //调用超类构造函数
-        super.initTCP_Receiver(this);    //初始化TCP接收端
+        super();
+        super.initTCP_Receiver(this);
         receiveWindow = new ReceiveWindow();
     }
 
     @Override
-    //接收到数据报：检查校验和，设置回复的ACK报文段
     public void rdt_recv(TCP_PACKET recvPack) {
-        //检查校验码，生成ACK
-        if (CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum()
-                && receiveWindow.onPacket(recvPack)) {
-            //生成ACK报文段（设置确认号）
-            tcpH.setTh_ack(recvPack.getTcpH().getTh_seq());
-            ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-            tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-            //回复ACK报文段
-            reply(ackPack);
-            //将接收到的正确有序的数据插入data队列，准备交付
-//            dataQueue.add(recvPack.getTcpS().getData());
-            lastSeq = receiveWindow.getRcvBase() - SEG_SIZE;
-            sequence++;
+        boolean checksumOK = CheckSum.computeChkSum(recvPack) == recvPack.getTcpH().getTh_sum();
 
+        if (checksumOK) {
+            receiveWindow.onPacket(recvPack);
+            sequence++;
         } else {
             System.out.println("Recieve Computed: " + CheckSum.computeChkSum(recvPack));
             System.out.println("Recieved Packet: " + recvPack.getTcpH().getTh_sum());
-            System.out.println("Problem: Packet Number: " + recvPack.getTcpH().getTh_seq() + " + InnerSeq:  " + sequence);
-            tcpH.setTh_ack(lastSeq);
-            ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
-            tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
-            //回复ACK报文段
-            reply(ackPack);
+            System.out.println("Problem: Packet Number: " + recvPack.getTcpH().getTh_seq()
+                    + " + InnerSeq: " + sequence);
         }
 
+        /*
+         * Reno / NewReno 关键：
+         * 始终回复累计 ACK，而不是回复当前收到的包号。
+         *
+         * - 收到按序包：rcvBase 向前滑动，ACK 变大；
+         * - 收到乱序包：rcvBase 不动，重复回复上一次累计 ACK；
+         * - 收到旧包：rcvBase 不动，仍回复当前最新累计 ACK；
+         * - 收到错误包：rcvBase 不动，仍回复当前最新累计 ACK。
+         */
+        lastSeq = receiveWindow.getRcvBase() - SEG_SIZE;
+        tcpH.setTh_ack(lastSeq);
+
+        ackPack = new TCP_PACKET(tcpH, tcpS, recvPack.getSourceAddr());
+        tcpH.setTh_sum(CheckSum.computeChkSum(ackPack));
+
+        reply(ackPack);
         System.out.println();
-
-
-        //交付数据（每20组数据交付一次）
-//        if (dataQueue.size() == 20)
-//            deliver_data();
     }
 
     @Override
-    //交付数据（将数据写入文件）；不需要修改
     public void deliver_data() {
-        //检查dataQueue，将数据写入文件
         File fw = new File("recvData.txt");
         BufferedWriter writer;
 
         try {
             writer = new BufferedWriter(new FileWriter(fw, true));
 
-            //循环检查data队列中是否有新交付数据
             while (!dataQueue.isEmpty()) {
                 int[] data = dataQueue.poll();
 
-                //将数据写入文件
-                for (int i = 0; i < data.length; i++) {
-                    writer.write(data[i] + "\n");
+                for (int datum : data) {
+                    writer.write(datum + "\n");
                 }
 
-                writer.flush();        //清空输出缓存
+                writer.flush();
             }
             writer.close();
         } catch (IOException e) {
-            // TODO Auto-generated catch block
             e.printStackTrace();
         }
     }
 
     @Override
-    //回复ACK报文段
     public void reply(TCP_PACKET replyPack) {
         /*
-        0.信道无差错
-        1.只出错
-        2.只丢包
-        3.只延迟
-        4.出错 / 丢包
-        5.出错 / 延迟
-        6.丢包 / 延迟
-        7.出错 / 丢包 / 延迟
+         * ACK 差错控制从配置读取。
+         *
+         * 建议测试 NewReno 时：
+         * tcp.ack.eflag=0
+         *
+         * 等确认 NewReno 的 DupACK / Partial ACK / Full ACK 行为正常后，
+         * 再逐步打开 ACK 丢包、延迟或出错。
          */
-        //设置错误控制标志
-        tcpH.setTh_eflag((byte) 7);    //eFlag = 0，信道无错误，接收方向发送方发送ACK或NACK信息时不会出现错误
-        //发送数据报
+        replyPack.getTcpH().setTh_eflag((byte) config.getAckEflag());
         client.send(replyPack);
     }
-
 }

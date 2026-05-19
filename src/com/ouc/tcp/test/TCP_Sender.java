@@ -1,100 +1,99 @@
-
 package com.ouc.tcp.test;
 
 import com.ouc.tcp.client.TCP_Sender_ADT;
-import com.ouc.tcp.client.UDT_RetransTask;
-import com.ouc.tcp.client.UDT_Timer;
 import com.ouc.tcp.message.*;
 
 public class TCP_Sender extends TCP_Sender_ADT {
 
-    private TCP_PACKET tcpPack;	//待发送的TCP数据报
+    private final TcpLabConfig config = TcpLabConfig.get();
+
+    private TCP_PACKET tcpPack;    // 待发送的 TCP 数据报
     private volatile int flag = 1;
     private final SendWindow sendWindow;
 
     /*构造函数*/
     public TCP_Sender() {
-        super();	//调用超类构造函数
-        super.initTCP_Sender(this);		//初始化TCP发送端
+        super();
+        super.initTCP_Sender(this);
         sendWindow = new SendWindow(client);
     }
 
     @Override
-    //可靠发送（应用层调用）：封装应用层数据，产生TCP数据报；需要修改
     public void rdt_send(int dataIndex, int[] appData) {
-        if(!sendWindow.isWindowAvailable()){
+        if (!sendWindow.isWindowAvailable()) {
             System.out.println("Window is not available");
             flag = 0;
         }
-        while(flag == 0);
-        //生成TCP数据报（设置序号和数据字段/校验和),注意打包的顺序
-        tcpH.setTh_seq(dataIndex * appData.length + 1);//包序号设置为字节流号：
+
+        while (flag == 0) {
+            // 等待 ACK 或快速恢复结束后窗口重新可用
+        }
+
+        /*
+         * 包序号设置为字节流号。
+         * SEG_SIZE 为 100 时，第 i 个包对应 i*100+1。
+         */
+        tcpH.setTh_seq(dataIndex * appData.length + 1);
+        tcpH.setTh_eflag((byte) config.getDataEflag());
+
         tcpS.setData(appData);
         tcpPack = new TCP_PACKET(tcpH, tcpS, destinAddr);
-        //更新带有checksum的TCP 报文头
+
         tcpH.setTh_sum(CheckSum.computeChkSum(tcpPack));
         tcpPack.setTcpH(tcpH);
 
-        //发送TCP数据报
         try {
+            /*
+             * 先放入发送窗口，窗口中保存的是待确认 / 待重传版本。
+             * 此时 eFlag 已经从配置中读取并设置完毕。
+             */
             sendWindow.putPacket(tcpPack.clone());
         } catch (CloneNotSupportedException e) {
             throw new RuntimeException(e);
         }
+
         udt_send(tcpPack);
-
-//        flag = 0;
-
-        //等待ACK报文
-        //waitACK();
-//        while (flag==0);
     }
 
     @Override
-    //不可靠发送：将打包好的TCP数据报通过不可靠传输信道发送；仅需修改错误标志
     public void udt_send(TCP_PACKET stcpPack) {
-        //设置错误控制标志
-        tcpH.setTh_eflag((byte)7);  //eFlag = 0，信道无错误，发送方像接收方发送数据时不会产生位错
-        //System.out.println("to send: "+stcpPack.getTcpH().getTh_seq());
-        //发送数据报
+        /*
+         * DATA 差错控制从配置读取。
+         *
+         * 建议测试 NewReno 时：
+         * tcp.data.eflag=2
+         *
+         * 即先只模拟 DATA 丢包，避免延迟旧包或错包干扰快速恢复判断。
+         */
+        stcpPack.getTcpH().setTh_eflag((byte) config.getDataEflag());
         client.send(stcpPack);
     }
 
     @Override
-    //需要修改
     public void waitACK() {
-        //循环检查ackQueue
-        //循环检查确认号对列中是否有新收到的ACK
-        if(!ackQueue.isEmpty()){
-            int currentAck=ackQueue.poll();
-            // System.out.println("CurrentAck: "+currentAck);
-            if (currentAck == tcpPack.getTcpH().getTh_seq()){
-                System.out.println("Clear: "+tcpPack.getTcpH().getTh_seq());
+        if (!ackQueue.isEmpty()) {
+            int currentAck = ackQueue.poll();
+            if (currentAck == tcpPack.getTcpH().getTh_seq()) {
+                System.out.println("Clear: " + tcpPack.getTcpH().getTh_seq());
                 flag = 1;
-                //break;
-            }else{
-//                System.out.println("Retransmit: "+tcpPack.getTcpH().getTh_seq());
-//                udt_send(tcpPack);
+            } else {
                 flag = 0;
             }
         }
     }
 
     @Override
-    //接收到ACK报文：检查校验和，将确认号插入ack队列;NACK的确认号为－1；不需要修改
     public void recv(TCP_PACKET recvPack) {
-        if(recvPack.getTcpH().getTh_sum() == CheckSum.computeChkSum(recvPack)) {
+        if (recvPack.getTcpH().getTh_sum() == CheckSum.computeChkSum(recvPack)) {
             int thAck = recvPack.getTcpH().getTh_ack();
             System.out.println("Receive ACK Number： " + thAck);
             System.out.println();
+
             sendWindow.onAck(thAck);
-            if(sendWindow.isWindowAvailable()){
+
+            if (sendWindow.isWindowAvailable()) {
                 flag = 1;
             }
         }
-        //处理ACK报文
-//        waitACK();Ò
-
     }
-
 }

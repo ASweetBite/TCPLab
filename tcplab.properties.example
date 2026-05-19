@@ -1,0 +1,32 @@
+# TCPLab 自定义配置
+# 可放在项目根目录，文件名为 tcplab.properties
+# 如果你想直接写进 Config.ini，也可以使用同样的 key=value 形式。
+
+# 可选：TCP_RENO / TCP_NEW_RENO
+protocol=TCP_NEW_RENO
+
+# 日志文件
+tcp.log=tcp_newreno.log
+
+# 超时时间，单位 ms
+tcp.timeout=1000
+
+# 差错控制标志：
+# 0 = 无差错
+# 1 = 只出错
+# 2 = 只丢包
+# 3 = 只延迟
+# 4 = 出错 / 丢包
+# 5 = 出错 / 延迟
+# 6 = 丢包 / 延迟
+# 7 = 出错 / 丢包 / 延迟
+
+# 测试 NewReno 时，建议先只让 DATA 丢包，ACK 和重传包可靠
+tcp.data.eflag=7
+tcp.ack.eflag=7
+tcp.retrans.eflag=7
+
+# 是否在快速恢复阶段暂停接收新的应用层数据
+# true：更适合课程实验展示
+# false：更接近真实 TCP，但需要更完整的 pipe/flightSize 控制
+tcp.freezeInFastRecovery=true

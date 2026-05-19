@@ -16,7 +16,10 @@ import java.util.Map;
 public class SendWindow {
 
     private static final int SEG_SIZE = 100;   // MSS（字节）
-    private static final int TIMEOUT = 1000;
+
+    /* ===== 配置 ===== */
+    private final TcpLabConfig config = TcpLabConfig.get();
+    private final int timeout = config.getTimeout();
 
     /* ===== 拥塞控制参数（单位：字节） ===== */
     private int cwnd = SEG_SIZE;               // 初始 1 MSS
@@ -27,6 +30,13 @@ public class SendWindow {
     private int nextSeq = 1;
     private int dupAckCount = 0;
     private boolean inFastRecovery = false;
+
+    /*
+     * NewReno 关键变量：
+     * 进入快速恢复时，记录当时已经发送出去的最高序号。
+     * 后续 ACK 若小于 recoverPoint，则认为是 partial ACK，不退出快速恢复。
+     */
+    private int recoverPoint = 0;
 
     private UDT_Timer timer = null;
     private final Map<Integer, SendEntry> window = new HashMap<>();
@@ -39,9 +49,12 @@ public class SendWindow {
     public SendWindow(Client client) {
         this.client = client;
         try {
-            // 日志保存在项目根目录
-            logWriter = new PrintWriter(new FileWriter("tcp_reno.log", false));
-            logState("INIT", "Window Initialized");
+            logWriter = new PrintWriter(new FileWriter(config.getLogFile(), false));
+            logState("INIT", "Window Initialized, protocol: " + config.getProtocol()
+                    + ", dataEFlag: " + config.getDataEflag()
+                    + ", ackEFlag: " + config.getAckEflag()
+                    + ", retransEFlag: " + config.getRetransEflag()
+                    + ", freezeInFastRecovery: " + config.freezeInFastRecovery());
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -49,24 +62,37 @@ public class SendWindow {
 
     /**
      * 核心日志记录方法
-     * 格式：时间 事件 seq base nextSeq cwnd ssthresh 状态 附加信息
+     * 格式：时间 事件 base nextSeq cwnd ssthresh 状态 附加信息
      */
     private void logState(String event, String info) {
         String timestamp = sdf.format(new Date());
         String stateStr = inFastRecovery ? "FastRecovery" : (cwnd < ssthresh ? "SlowStart" : "CongAvoid");
 
-        // 打印到控制台（保留你原有的习惯）
-        System.out.println("[" + event + "] " + info + " | cwnd:" + cwnd/SEG_SIZE + " ssthresh:" + ssthresh/SEG_SIZE);
+        System.out.println("[" + event + "] " + info
+                + " | cwnd:" + cwnd / SEG_SIZE
+                + " ssthresh:" + ssthresh / SEG_SIZE
+                + " protocol:" + config.getProtocol());
 
-        // 写入文件 (使用制表符或固定格式便于后续解析)
         if (logWriter != null) {
-            logWriter.printf("%s\tEVENT:%-15s\tbase:%-8d\tnext:%-8d\tcwnd:%-6d\tssthresh:%-6d\tstate:%-12s\tinfo:%s\n",
+            logWriter.printf("%s\tEVENT:%-18s\tbase:%-8d\tnext:%-8d\tcwnd:%-6d\tssthresh:%-6d\tstate:%-12s\tinfo:%s\n",
                     timestamp, event, sendBase, nextSeq, cwnd, ssthresh, stateStr, info);
             logWriter.flush();
         }
     }
 
+    /**
+     * 判断发送窗口是否允许继续接收上层新数据。
+     *
+     * 为了让课程实验更清楚地展示 NewReno 的 partial ACK 行为，
+     * 默认在快速恢复阶段暂停发送新数据，只处理当前恢复窗口内的包。
+     *
+     * 如果想更接近真实 TCP，可以在配置中设置：
+     * tcp.freezeInFastRecovery=false
+     */
     public boolean isWindowAvailable() {
+        if (config.freezeInFastRecovery() && inFastRecovery) {
+            return false;
+        }
         return nextSeq < sendBase + cwnd;
     }
 
@@ -92,45 +118,122 @@ public class SendWindow {
     }
 
     public void onAck(int ack) {
+        /*
+         * 过旧 ACK：比当前累计确认号还小，直接忽略。
+         * 当前累计确认号是 sendBase - SEG_SIZE。
+         */
         if (ack < sendBase - SEG_SIZE) {
+            logState("OLD_ACK", "AckNum: " + ack + ", lastAcked: " + (sendBase - SEG_SIZE));
             return;
         }
 
-        // 处理重复 ACK (DupACK)
+        /*
+         * 重复 ACK：ACK 等于当前累计确认号。
+         */
         if (ack == sendBase - SEG_SIZE) {
             dupAckCount++;
-            logState("DUP_ACK", "AckNum: " + ack + " count: " + dupAckCount);
+            logState("DUP_ACK", "AckNum: " + ack + ", count: " + dupAckCount);
 
             if (dupAckCount >= 3 && !inFastRecovery) {
-                // 进入快重传/快恢复
-                ssthresh = Math.max((cwnd / 2 / SEG_SIZE) * SEG_SIZE, SEG_SIZE);
-                cwnd = ssthresh + 3 * SEG_SIZE; // Reno 标准：进入快恢复时 cwnd 膨胀
-                inFastRecovery = true;
-
-                logState("FAST_RETRANS", "Retransmit seq: " + sendBase);
-
-                SendEntry entry = window.get(sendBase);
-                if (entry != null) {
-                    client.send(entry.packet);
-                }
-            }
-            else if (inFastRecovery) {
-                cwnd += SEG_SIZE; // 每收到一个多余的 DupACK，窗口膨胀 1 MSS
-                logState("FR_INFLATE", "Fast Recovery cwnd inflate");
-
-                SendEntry entry = window.get(sendBase);
-                if (entry != null) {
-                    client.send(entry.packet);
-                }
+                enterFastRecovery();
+            } else if (inFastRecovery) {
+                /*
+                 * Reno / NewReno 快速恢复中的额外 DupACK：
+                 * 只膨胀 cwnd，不重复重传 sendBase。
+                 * 是否继续发送新数据由 isWindowAvailable() 和配置控制。
+                 */
+                cwnd += SEG_SIZE;
+                logState("FR_INFLATE", "Extra DupACK, cwnd += MSS");
             }
             return;
         }
 
-        // 收到新的 ACK (New ACK)
+        /*
+         * 新 ACK：标记累计确认范围。
+         */
         logState("NEW_ACK", "AckNum: " + ack);
-        dupAckCount = 0;
+        markAckedUpTo(ack);
 
-        // 累计确认逻辑
+        if (inFastRecovery) {
+            handleAckInFastRecovery(ack);
+        } else {
+            dupAckCount = 0;
+            updateCwndNormally();
+            advanceSendBase();
+        }
+    }
+
+    private void enterFastRecovery() {
+        ssthresh = Math.max((cwnd / 2 / SEG_SIZE) * SEG_SIZE, SEG_SIZE);
+        cwnd = ssthresh + 3 * SEG_SIZE;
+        inFastRecovery = true;
+
+        // NewReno：记录进入快速恢复时已经发送出去的最高序号。
+        recoverPoint = nextSeq - SEG_SIZE;
+
+        logState("ENTER_FR", "recoverPoint: " + recoverPoint);
+        retransmitSendBase("FAST_RETRANS");
+    }
+
+    private void handleAckInFastRecovery(int ack) {
+        /*
+         * 先推进 sendBase。
+         * 如果 ACK 只确认了一部分数据，sendBase 会停在下一个未确认包。
+         */
+        advanceSendBase();
+
+        if (config.isNewReno() && ack < recoverPoint) {
+            /*
+             * NewReno partial ACK：
+             * ACK 没有覆盖 recoverPoint，说明进入快速恢复时已经发出的数据中
+             * 仍有后续报文段丢失。此时不退出快速恢复，而是立即重传新的 sendBase。
+             */
+            logState("PARTIAL_ACK", "AckNum: " + ack
+                    + ", recoverPoint: " + recoverPoint
+                    + ", retransmit new base: " + sendBase);
+
+            retransmitSendBase("NEWRENO_RETRANS");
+
+            // 保持快速恢复状态。
+            cwnd = Math.max(ssthresh + 3 * SEG_SIZE, SEG_SIZE);
+
+            restartTimerIfNeeded();
+            return;
+        }
+
+        /*
+         * Reno：收到任意 New ACK 就退出快速恢复。
+         * NewReno：只有 full ACK，即 ack >= recoverPoint，才退出快速恢复。
+         */
+        cwnd = ssthresh;
+        inFastRecovery = false;
+        dupAckCount = 0;
+        recoverPoint = 0;
+
+        if (config.isNewReno()) {
+            logState("EXIT_FR", "Full ACK, Exit Fast Recovery");
+        } else {
+            logState("EXIT_FR", "Reno New ACK, Exit Fast Recovery");
+        }
+
+        restartTimerIfNeeded();
+    }
+
+    private void updateCwndNormally() {
+        if (cwnd < ssthresh) {
+            cwnd += SEG_SIZE; // 慢启动
+            logState("CWND_UPDATE", "Slow Start cwnd += MSS");
+        } else {
+            int delta = (SEG_SIZE * SEG_SIZE) / cwnd;
+            if (delta <= 0) {
+                delta = 1;
+            }
+            cwnd += delta; // 拥塞避免
+            logState("CWND_UPDATE", "Congestion Avoidance cwnd += MSS*MSS/cwnd");
+        }
+    }
+
+    private void markAckedUpTo(int ack) {
         int seq = sendBase;
         while (seq <= ack) {
             SendEntry e = window.get(seq);
@@ -139,22 +242,6 @@ public class SendWindow {
             }
             seq += SEG_SIZE;
         }
-
-        if (inFastRecovery) {
-            // 收到新确认，退出快恢复
-            cwnd = ssthresh;
-            inFastRecovery = false;
-            logState("EXIT_FR", "Exit Fast Recovery");
-        } else {
-            // 正常拥塞控制更新
-            if (cwnd < ssthresh) {
-                cwnd += SEG_SIZE; // 慢启动
-            } else {
-                cwnd += (SEG_SIZE * SEG_SIZE) / cwnd; // 拥塞避免
-            }
-        }
-
-        advanceSendBase();
     }
 
     private void advanceSendBase() {
@@ -169,10 +256,25 @@ public class SendWindow {
 
         if (baseMoved) {
             logState("WINDOW_SLIDE", "Base: " + oldBase + " -> " + sendBase);
-            stopTimer();
-            if (!window.isEmpty()) {
-                startTimer();
-            }
+            restartTimerIfNeeded();
+        }
+    }
+
+    private void retransmitSendBase(String eventName) {
+        SendEntry entry = window.get(sendBase);
+        if (entry != null) {
+            entry.packet.getTcpH().setTh_eflag((byte) config.getRetransEflag());
+            client.send(entry.packet);
+            logState(eventName, "Retransmit seq: " + sendBase);
+        } else {
+            logState(eventName, "No packet found at sendBase: " + sendBase);
+        }
+    }
+
+    private void restartTimerIfNeeded() {
+        stopTimer();
+        if (!window.isEmpty()) {
+            startTimer();
         }
     }
 
@@ -181,7 +283,7 @@ public class SendWindow {
         timer = new UDT_Timer();
         SendEntry entry = window.get(sendBase);
         TCP_PACKET basePkt = entry != null ? entry.packet : null;
-        timer.schedule(new RetransTask(basePkt), TIMEOUT);
+        timer.schedule(new RetransTask(basePkt), timeout);
     }
 
     private void stopTimer() {
@@ -194,29 +296,29 @@ public class SendWindow {
     private static class SendEntry {
         TCP_PACKET packet;
         boolean acked = false;
-        SendEntry(TCP_PACKET packet) { this.packet = packet; }
+
+        SendEntry(TCP_PACKET packet) {
+            this.packet = packet;
+        }
     }
 
     private class RetransTask extends UDT_RetransTask {
-        public RetransTask(TCP_PACKET pkt) { super(client, pkt); }
+        public RetransTask(TCP_PACKET pkt) {
+            super(client, pkt);
+        }
 
         @Override
         public void run() {
             logState("TIMEOUT", "Timeout at base: " + sendBase);
 
             ssthresh = Math.max((cwnd / 2 / SEG_SIZE) * SEG_SIZE, SEG_SIZE);
-            cwnd = SEG_SIZE; // 超时回到 1 MSS
+            cwnd = SEG_SIZE;
             inFastRecovery = false;
             dupAckCount = 0;
+            recoverPoint = 0;
 
-            SendEntry entry = window.get(sendBase);
-            if (entry != null) {
-                client.send(entry.packet);
-                logState("RETRANSMIT", "Resend Base: " + sendBase);
-            }
+            retransmitSendBase("RETRANSMIT");
 
-            // 注意：超时不应该立刻 advanceSendBase，而是重传后再等待 ACK
-            // 除非逻辑要求，否则通常超时只重传不滑动
             if (!window.isEmpty()) {
                 startTimer();
             }
